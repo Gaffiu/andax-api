@@ -3,12 +3,13 @@ import torch.nn as nn
 import torch.nn.functional as F
 import math
 import json
+import requests
 from fastapi import FastAPI
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 
 # ============================================================
-# ARQUITETURA DO ANDAX (Corpo)
+# O CORPO DO ANDAX
 # ============================================================
 class MultiHeadAttention(nn.Module):
     def __init__(self, n_embd, n_head, block_size, dropout=0.1):
@@ -21,7 +22,6 @@ class MultiHeadAttention(nn.Module):
         self.proj = nn.Linear(n_embd, n_embd, bias=False)
         self.dropout = nn.Dropout(dropout)
         self.register_buffer("mask", torch.tril(torch.ones(block_size, block_size)).view(1, 1, block_size, block_size))
-
     def forward(self, x):
         B, T, C = x.shape
         qkv = self.qkv(x)
@@ -40,10 +40,7 @@ class MultiHeadAttention(nn.Module):
 class FeedForward(nn.Module):
     def __init__(self, n_embd, dropout=0.1):
         super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(n_embd, 4 * n_embd), nn.GELU(),
-            nn.Linear(4 * n_embd, n_embd), nn.Dropout(dropout),
-        )
+        self.net = nn.Sequential(nn.Linear(n_embd, 4 * n_embd), nn.GELU(), nn.Linear(4 * n_embd, n_embd), nn.Dropout(dropout))
     def forward(self, x): return self.net(x)
 
 class Block(nn.Module):
@@ -68,7 +65,6 @@ class ANDAX(nn.Module):
         self.blocks = nn.Sequential(*[Block(n_embd, n_head, block_size, dropout) for _ in range(n_layer)])
         self.ln_f = nn.LayerNorm(n_embd)
         self.head = nn.Linear(n_embd, vocab_size, bias=False)
-
     def forward(self, idx, targets=None):
         B, T = idx.shape
         pos = torch.arange(0, T, dtype=torch.long, device=idx.device)
@@ -86,25 +82,16 @@ class ANDAX(nn.Module):
 # INICIANDO O SERVIDOR E CARREGANDO O CÉREBRO
 # ============================================================
 app = FastAPI()
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-# Permite que o iPhone acesse a API
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+device = "cpu"
 
-device = "cpu" # O Render gratuito usa CPU
-
-# Carrega o vocabulário
 with open("vocab.json", "r") as f:
     vocab_data = json.load(f)
 stoi = vocab_data["stoi"]
 itos = {int(k): v for k, v in vocab_data["itos"].items()}
 vocab_size = len(stoi)
 
-# Carrega o modelo
 model = ANDAX(vocab_size=vocab_size)
 model.load_state_dict(torch.load("andax_cerebro.pth", map_location=device))
 model.eval()
@@ -116,14 +103,34 @@ class ChatRequest(BaseModel):
 
 @app.get("/")
 def home():
-    return {"status": "ANDAX esta online e respirando!"}
+    return {"status": "ANDAX esta online com olhos na internet!"}
+
+# ============================================================
+# A MÁGICA DO RAG (OLHOS DA INTERNET)
+# ============================================================
+def buscar_wikipedia(pergunta):
+    url = f"https://pt.wikipedia.org/api/rest_v1/page/summary/{pergunta.replace(' ', '_')}"
+    headers = {'User-Agent': 'ANDAX-Bot/1.0'}
+    try:
+        response = requests.get(url, headers=headers, timeout=5)
+        if response.status_code == 200:
+            dados = response.json()
+            return dados.get("extract", "Não encontrei informações exatas.")
+    except:
+        pass
+    return None
 
 @app.post("/chat")
 def chat(req: ChatRequest):
-    # Traduz o texto para números
-    idx = torch.tensor([[stoi.get(c, 0) for c in req.texto]], dtype=torch.long, device=device)
+    # 1. O ANDAX tenta buscar na internet primeiro (RAG)
+    conhecimento_internet = buscar_wikipedia(req.texto)
     
-    # Gera a resposta
+    # 2. Se ele achou algo, ele responde com o texto da internet formatado
+    if conhecimento_internet:
+        return {"resposta": f"[Olhos da Internet ativados]\n\n{conhecimento_internet}"}
+    
+    # 3. Se não achar, ele usa o cérebro local (o modelo que treinamos)
+    idx = torch.tensor([[stoi.get(c, 0) for c in req.texto]], dtype=torch.long, device=device)
     with torch.no_grad():
         for _ in range(req.max_tokens):
             idx_cond = idx[:, -model.block_size:]
@@ -133,6 +140,5 @@ def chat(req: ChatRequest):
             idx_next = torch.multinomial(probs, num_samples=1)
             idx = torch.cat((idx, idx_next), dim=1)
             
-    # Traduz de volta para texto
     resposta = "".join([itos.get(i, "?") for i in idx[0].tolist()])
-    return {"resposta": resposta}
+    return {"resposta": f"[Cérebro Local]\n\n{resposta}"}
