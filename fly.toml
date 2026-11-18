@@ -12,12 +12,17 @@ primary_region = "gru"
 [processes]
   web = "uvicorn app:app --host 0.0.0.0 --port 10000"
 
-[[services]]
+[http_service]
   internal_port = 10000
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
   processes = ["web"]
-  protocol = "tcp"
 
-  [services.concurrency]
-    type = "connections"
-    hard_limit = 25
-    soft_limit = 20
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval = "30s"
+    method = "GET"
+    timeout = "5s"
+    path = "/"
